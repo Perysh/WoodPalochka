@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Волшебная палочка</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    cursor: none;
+    touch-action: none;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; background: transparent; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var cv = document.getElementById('c');
+  var ctx = cv.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var W = 0, H = 0;
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var tip = { x: W / 2, y: H / 2 };      // кончик палочки (цель)
+  var cur = { x: W / 2, y: H / 2 };      // сглаженная позиция
+  var vel = { x: 0, y: 0 };
+  var active = false;
+  var parts = [];
+  var trail = [];
+  var hue = 270;
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function move(x, y) { tip.x = x; tip.y = y; active = true; }
+  window.addEventListener('pointermove', function (e) { move(e.clientX, e.clientY); });
+  window.addEventListener('pointerdown', function (e) { move(e.clientX, e.clientY); burst(e.clientX, e.clientY, 60); });
+  window.addEventListener('pointerleave', function () { active = false; });
+
+  function spawn(x, y, speed) {
+    var a = Math.random() * Math.PI * 2;
+    var s = Math.random() * 1.4 + 0.2 + speed * 0.04;
+    parts.push({
+      x: x, y: y,
+      vx: Math.cos(a) * s + vel.x * 0.05,
+      vy: Math.sin(a) * s + vel.y * 0.05 + 0.15,
+      life: 1,
+      decay: Math.random() * 0.016 + 0.01,
+      size: Math.random() * 2.6 + 0.8,
+      hue: hue + Math.random() * 60 - 30,
+      star: Math.random() < 0.35,
+      spin: Math.random() * 6
+    });
+  }
+
+  function burst(x, y, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2;
+      var s = Math.random() * 4 + 1;
+      parts.push({
+        x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life: 1, decay: Math.random() * 0.014 + 0.012,
+        size: Math.random() * 3 + 1, hue: hue + Math.random() * 90 - 45,
+        star: Math.random() < 0.5, spin: Math.random() * 6
+      });
+    }
+  }
+
+  function drawStar(x, y, r, rot) {
+    ctx.beginPath();
+    for (var i = 0; i < 8; i++) {
+      var ang = rot + i * Math.PI / 4;
+      var rad = i % 2 === 0 ? r * 2.4 : r * 0.7;
+      ctx.lineTo(x + Math.cos(ang) * rad, y + Math.sin(ang) * rad);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawWand(x, y, angle) {
+    var len = 150, thick = 7;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    // палочка идёт от кончика (0,0) вниз-вправо
+    var g = ctx.createLinearGradient(0, 0, len, 0);
+    g.addColorStop(0, '#f3e3b0');
+    g.addColorStop(0.15, '#7a4b2a');
+    g.addColorStop(1, '#2a160b');
+    ctx.fillStyle = g;
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(len, -thick);
+    ctx.quadraticCurveTo(len + 10, 0, len, thick);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // кольца на рукояти
+    ctx.strokeStyle = 'rgba(240,210,140,0.7)';
+    ctx.lineWidth = 1.5;
+    for (var i = 0; i < 3; i++) {
+      var px = len * (0.55 + i * 0.1);
+      var h = thick * (0.3 + (px / len) * 0.7);
+      ctx.beginPath(); ctx.moveTo(px, -h); ctx.lineTo(px, h); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  var lastAngle = Math.PI * 0.8;
+  var t = 0;
+
+  function frame() {
+    t += 0.016;
+    var px = cur.x, py = cur.y;
+    cur.x += (tip.x - cur.x) * 0.28;
+    cur.y += (tip.y - cur.y) * 0.28;
+    vel.x = cur.x - px; vel.y = cur.y - py;
+    var speed = Math.hypot(vel.x, vel.y);
+
+    hue = (hue + 0.6 + speed * 0.05) % 360;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // шлейф магии
+    if (active) {
+      trail.push({ x: cur.x, y: cur.y, life: 1 });
+      var n = reduce ? 1 : Math.min(8, 2 + Math.floor(speed * 0.5));
+      for (var i = 0; i < n; i++) spawn(cur.x, cur.y, speed);
+      // лёгкий покой: искры даже когда палочка стоит
+      if (speed < 0.3 && Math.random() < 0.5) spawn(cur.x, cur.y, 0);
+    }
+    if (trail.length > 1) {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (var k = trail.length - 1; k > 0; k--) {
+        var p0 = trail[k - 1], p1 = trail[k];
+        p1.life -= 0.045;
+        if (p1.life <= 0) continue;
+        ctx.strokeStyle = 'hsla(' + (hue + k * 3) + ',100%,70%,' + (p1.life * 0.55) + ')';
+        ctx.lineWidth = 7 * p1.life;
+        ctx.shadowColor = 'hsl(' + hue + ',100%,65%)';
+        ctx.shadowBlur = 14;
+        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      while (trail.length && trail[0].life <= 0) trail.shift();
+    }
+
+    // частицы
+    ctx.globalCompositeOperation = 'lighter';
+    for (var j = parts.length - 1; j >= 0; j--) {
+      var p = parts[j];
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.985; p.vy = p.vy * 0.985 + 0.012;
+      p.life -= p.decay;
+      if (p.life <= 0) { parts.splice(j, 1); continue; }
+      ctx.fillStyle = 'hsla(' + p.hue + ',100%,' + (60 + p.life * 20) + '%,' + p.life + ')';
+      if (p.star) {
+        drawStar(p.x, p.y, p.size * p.life, p.spin + t * 3);
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life + 0.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    if (parts.length > 900) parts.splice(0, parts.length - 900);
+    ctx.globalCompositeOperation = 'source-over';
+
+    // палочка наклоняется по движению
+    var target = Math.PI * 0.8 + Math.max(-0.5, Math.min(0.5, vel.x * 0.03));
+    lastAngle += (target - lastAngle) * 0.12;
+    drawWand(cur.x, cur.y, lastAngle);
+
+    // сияние на кончике
+    var r = 16 + Math.sin(t * 6) * 3;
+    var glow = ctx.createRadialGradient(cur.x, cur.y, 0, cur.x, cur.y, r);
+    glow.addColorStop(0, 'rgba(255,255,255,0.95)');
+    glow.addColorStop(0.4, 'hsla(' + hue + ',100%,75%,0.55)');
+    glow.addColorStop(1, 'hsla(' + hue + ',100%,70%,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(cur.x, cur.y, r, 0, Math.PI * 2); ctx.fill();
+
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>

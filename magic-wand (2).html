@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Волшебная палочка</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; cursor: none; touch-action: none; user-select: none; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; background: transparent; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var cv = document.getElementById('c');
+  var ctx = cv.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var W = 0, H = 0;
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var tip = { x: W / 2, y: H / 2 }, cur = { x: W / 2, y: H / 2 }, vel = { x: 0, y: 0 };
+  var active = false, hue = 270, t = 0, kick = 0, boltCd = 0, lastAngle = Math.PI * 0.8, aim = 0, aimShow = 0, pixCd = 90;
+  var pix = [];
+  var held = { l: false, r: false };
+  var parts = [], flames = [], bolts = [], rings = [], trail = [];
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var R = Math.random;
+
+  function pointing() { return lastAngle + Math.PI; }
+
+  /* ---------- ввод ---------- */
+  function move(e) { tip.x = e.clientX; tip.y = e.clientY; active = true; }
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerdown', function (e) {
+    move(e);
+    if (e.button === 2) { held.r = true; igniteBurst(); }
+    else { held.l = true; boltCd = 10; castBolt(); }
+  });
+  function release(e) {
+    if (!e || e.button === 2) held.r = false;
+    if (!e || e.button !== 2) held.l = false;
+  }
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', function () { release(null); });
+  window.addEventListener('blur', function () { release(null); });
+  window.addEventListener('pointerleave', function () { active = false; });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  window.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    aim += Math.max(-0.4, Math.min(0.4, e.deltaY * 0.003));
+    aimShow = 1.5;
+  }, { passive: false });
+
+  /* ---------- частицы ---------- */
+  function spark(x, y, speed) {
+    var a = R() * 6.283, s = R() * 1.4 + 0.2 + speed * 0.04;
+    parts.push({ x: x, y: y, vx: Math.cos(a) * s + vel.x * 0.05, vy: Math.sin(a) * s + vel.y * 0.05 + 0.15,
+      life: 1, decay: R() * 0.016 + 0.01, size: R() * 2.6 + 0.8, hue: hue + R() * 60 - 30, star: R() < 0.35, spin: R() * 6 });
+  }
+  function burst(x, y, n, h, sp) {
+    for (var i = 0; i < n; i++) {
+      var a = R() * 6.283, s = (R() * 4 + 1) * (sp || 1);
+      parts.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, decay: R() * 0.014 + 0.012,
+        size: R() * 3 + 1, hue: h + R() * 90 - 45, star: R() < 0.5, spin: R() * 6 });
+    }
+  }
+  function ring(x, y, h, grow) { rings.push({ x: x, y: y, r: 4, life: 1, hue: h, grow: grow }); }
+
+  /* ---------- ЛКМ: звёздный снаряд ---------- */
+  function castBolt() {
+    var a = pointing() + (R() - 0.5) * 0.08;
+    bolts.push({ x: cur.x, y: cur.y, vx: Math.cos(a) * 15, vy: Math.sin(a) * 15, age: 0, hue: hue, ph: R() * 6 });
+    ring(cur.x, cur.y, hue, 5);
+    burst(cur.x, cur.y, 18, hue, 1);
+    kick = 14;
+  }
+  function explode(b) {
+    burst(b.x, b.y, 80, b.hue, 1.6);
+    ring(b.x, b.y, b.hue, 9);
+    ring(b.x, b.y, b.hue + 60, 5);
+  }
+
+  /* ---------- ПКМ: огонь ---------- */
+  function flame(x, y, a, spd, size) {
+    flames.push({ x: x, y: y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, life: 1,
+      decay: R() * 0.02 + 0.022, size: size });
+  }
+  function igniteBurst() {
+    for (var i = 0; i < 45; i++) flame(cur.x, cur.y, R() * 6.283, R() * 5 + 1, R() * 6 + 6);
+    ring(cur.x, cur.y, 20, 7);
+    kick = 10;
+  }
+
+  /* ---------- рисование ---------- */
+  function drawStar(x, y, r, rot) {
+    ctx.beginPath();
+    for (var i = 0; i < 8; i++) {
+      var ang = rot + i * Math.PI / 4, rad = i % 2 === 0 ? r * 2.4 : r * 0.7;
+      ctx.lineTo(x + Math.cos(ang) * rad, y + Math.sin(ang) * rad);
+    }
+    ctx.closePath(); ctx.fill();
+  }
+  function glowAt(x, y, r, h, a) {
+    var g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,' + a + ')');
+    g.addColorStop(0.4, 'hsla(' + h + ',100%,62%,' + (a * 0.7) + ')');
+    g.addColorStop(1, 'hsla(' + h + ',100%,60%,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
+  }
+  function drawWand(x, y, angle) {
+    var len = 150, th = 7;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    var g = ctx.createLinearGradient(0, 0, len, 0);
+    g.addColorStop(0, '#f3e3b0'); g.addColorStop(0.15, '#7a4b2a'); g.addColorStop(1, '#2a160b');
+    ctx.fillStyle = g; ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(len, -th);
+    ctx.quadraticCurveTo(len + 10, 0, len, th); ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(240,210,140,0.7)'; ctx.lineWidth = 1.5;
+    for (var i = 0; i < 3; i++) {
+      var px = len * (0.55 + i * 0.1), h = th * (0.3 + (px / len) * 0.7);
+      ctx.beginPath(); ctx.moveTo(px, -h); ctx.lineTo(px, h); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* ---------- пикси ---------- */
+  function spawnPixie() {
+    if (pix.length >= 4) return;
+    var fromLeft = R() < 0.5;
+    pix.push({ x: fromLeft ? -30 : W + 30, y: H * (0.15 + R() * 0.7), base: fromLeft ? 0 : Math.PI,
+      dir: fromLeft ? 0 : Math.PI, sp: R() * 0.9 + 1.4, hue: [320, 175, 95, 45, 270][Math.floor(R() * 5)],
+      ph: R() * 6, age: 0 });
+  }
+  function killPixie(i, kind) {
+    var p = pix[i];
+    if (kind === 'fire') {
+      for (var k = 0; k < 16; k++) flame(p.x, p.y, R() * 6.283, R() * 4 + 1, R() * 4 + 4);
+      for (var e = 0; e < 14; e++) parts.push({ x: p.x, y: p.y, vx: (R() - 0.5) * 6, vy: -R() * 4, life: 1, decay: 0.02,
+        size: 1.8, hue: 20 + R() * 25, star: false, spin: 0 });
+      ring(p.x, p.y, 25, 6);
+    } else {
+      burst(p.x, p.y, 45, p.hue, 1.3);
+      ring(p.x, p.y, p.hue, 7);
+    }
+    pix.splice(i, 1);
+  }
+  function drawPixie(p) {
+    glowAt(p.x, p.y, 22, p.hue, 0.55);
+    ctx.save(); ctx.translate(p.x, p.y);
+    var flap = Math.sin(t * 45 + p.ph);
+    ctx.fillStyle = 'hsla(' + p.hue + ',100%,85%,0.7)';
+    for (var sd = -1; sd <= 1; sd += 2) {
+      ctx.save(); ctx.scale(sd, 1); ctx.rotate(-0.5 - flap * 0.35);
+      ctx.beginPath(); ctx.ellipse(7, -3, 9, 3.5, 0, 0, 6.283); ctx.fill();
+      ctx.restore();
+    }
+    ctx.fillStyle = 'hsl(' + p.hue + ',90%,70%)';
+    ctx.beginPath(); ctx.ellipse(0, 1, 2.6, 4.2, 0, 0, 6.283); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(0, -4, 2.4, 0, 6.283); ctx.fill();
+    ctx.restore();
+  }
+
+  function frame() {
+    t += 0.016;
+    var px = cur.x, py = cur.y;
+    cur.x += (tip.x - cur.x) * 0.28; cur.y += (tip.y - cur.y) * 0.28;
+    vel.x = cur.x - px; vel.y = cur.y - py;
+    var speed = Math.hypot(vel.x, vel.y);
+    hue = (hue + 0.6 + speed * 0.05) % 360;
+    var p = pointing(), cp = Math.cos(p), sp = Math.sin(p);
+
+    // стрельба при зажатой ЛКМ
+    if (held.l && --boltCd <= 0) { castBolt(); boltCd = 9; }
+    // огнемёт при зажатой ПКМ
+    if (held.r) {
+      var n = reduce ? 3 : 7;
+      for (var i = 0; i < n; i++) flame(cur.x + cp * 8, cur.y + sp * 8, p + (R() - 0.5) * 0.34, R() * 6 + 7, R() * 5 + 5);
+      if (R() < 0.5) parts.push({ x: cur.x + cp * 8, y: cur.y + sp * 8, vx: Math.cos(p + (R() - 0.5) * 0.9) * (R() * 6 + 3),
+        vy: Math.sin(p + (R() - 0.5) * 0.9) * (R() * 6 + 3) - 0.6, life: 1, decay: 0.018, size: 1.6, hue: 20 + R() * 25, star: false, spin: 0 });
+    }
+
+    ctx.clearRect(0, 0, W, H);
+
+    // шлейф при движении
+    if (active && !held.r) {
+      trail.push({ x: cur.x, y: cur.y, life: 1 });
+      var m = reduce ? 1 : Math.min(8, 2 + Math.floor(speed * 0.5));
+      for (var q = 0; q < m; q++) spark(cur.x, cur.y, speed);
+      if (speed < 0.3 && R() < 0.5) spark(cur.x, cur.y, 0);
+    }
+    if (trail.length > 1) {
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (var k = trail.length - 1; k > 0; k--) {
+        var p0 = trail[k - 1], p1 = trail[k];
+        p1.life -= 0.045;
+        if (p1.life <= 0) continue;
+        ctx.strokeStyle = 'hsla(' + (hue + k * 3) + ',100%,66%,' + (p1.life * 0.55) + ')';
+        ctx.lineWidth = 7 * p1.life; ctx.shadowColor = 'hsl(' + hue + ',100%,65%)'; ctx.shadowBlur = 14;
+        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      while (trail.length && trail[0].life <= 0) trail.shift();
+    }
+
+    // искры
+    for (var j = parts.length - 1; j >= 0; j--) {
+      var s = parts[j];
+      s.x += s.vx; s.y += s.vy; s.vx *= 0.985; s.vy = s.vy * 0.985 + 0.012; s.life -= s.decay;
+      if (s.life <= 0) { parts.splice(j, 1); continue; }
+      ctx.fillStyle = 'hsla(' + s.hue + ',100%,' + (52 + s.life * 14) + '%,' + s.life + ')';
+      if (s.star) drawStar(s.x, s.y, s.size * s.life, s.spin + t * 3);
+      else { ctx.beginPath(); ctx.arc(s.x, s.y, s.size * s.life + 0.3, 0, 6.283); ctx.fill(); }
+    }
+    if (parts.length > 900) parts.splice(0, parts.length - 900);
+
+    // пламя
+    for (var f = flames.length - 1; f >= 0; f--) {
+      var fl = flames[f];
+      fl.x += fl.vx; fl.y += fl.vy; fl.vy -= 0.12; fl.vx *= 0.975; fl.vy *= 0.975;
+      fl.life -= fl.decay; fl.size += 0.18;
+      if (fl.life <= 0) { flames.splice(f, 1); continue; }
+      if (fl.life > 0.25) for (var fi = pix.length - 1; fi >= 0; fi--) {
+        if (Math.hypot(pix[fi].x - fl.x, pix[fi].y - fl.y) < fl.size + 12) { killPixie(fi, 'fire'); break; }
+      }
+      var al = Math.min(1, fl.life * 1.2);
+      if (fl.life < 0.22) {
+        ctx.fillStyle = 'rgba(70,58,58,' + (fl.life * 0.9) + ')';
+        ctx.beginPath(); ctx.arc(fl.x, fl.y, fl.size * 1.1, 0, 6.283); ctx.fill();
+      } else {
+        var hh = 8 + fl.life * 55, ll = 38 + fl.life * 42;
+        ctx.fillStyle = 'hsla(' + hh + ',100%,' + ll + '%,' + (al * 0.28) + ')';
+        ctx.beginPath(); ctx.arc(fl.x, fl.y, fl.size * 1.6, 0, 6.283); ctx.fill();
+        ctx.fillStyle = 'hsla(' + hh + ',100%,' + ll + '%,' + (al * 0.65) + ')';
+        ctx.beginPath(); ctx.arc(fl.x, fl.y, fl.size * 0.8, 0, 6.283); ctx.fill();
+      }
+    }
+    if (flames.length > 800) flames.splice(0, flames.length - 800);
+
+    // кольца-ударные волны
+    for (var r = rings.length - 1; r >= 0; r--) {
+      var rg = rings[r];
+      rg.r += rg.grow; rg.grow *= 0.93; rg.life -= 0.035;
+      if (rg.life <= 0) { rings.splice(r, 1); continue; }
+      ctx.strokeStyle = 'hsla(' + rg.hue + ',100%,62%,' + (rg.life * 0.8) + ')';
+      ctx.lineWidth = 3 * rg.life + 1;
+      ctx.beginPath(); ctx.arc(rg.x, rg.y, rg.r, 0, 6.283); ctx.stroke();
+    }
+
+    // снаряды
+    for (var b = bolts.length - 1; b >= 0; b--) {
+      var bo = bolts[b];
+      var ca = Math.atan2(bo.vy, bo.vx) + Math.sin(bo.age * 0.15 + bo.ph) * 0.035;
+      bo.vx = Math.cos(ca) * 15; bo.vy = Math.sin(ca) * 15;
+      bo.x += bo.vx; bo.y += bo.vy; bo.age++; bo.hue = (bo.hue + 3) % 360;
+      var nx = -bo.vy / 15, ny = bo.vx / 15;
+      for (var w = 0; w < 2; w++) {
+        var off = Math.sin(bo.age * 0.45 + bo.ph + w * Math.PI) * 12;
+        parts.push({ x: bo.x + nx * off, y: bo.y + ny * off, vx: (R() - 0.5) * 0.5, vy: (R() - 0.5) * 0.5,
+          life: 1, decay: 0.035, size: 2.2, hue: bo.hue + w * 50, star: w === 0, spin: R() * 6 });
+      }
+      parts.push({ x: bo.x, y: bo.y, vx: (R() - 0.5), vy: (R() - 0.5), life: 1, decay: 0.05, size: 3, hue: bo.hue, star: false, spin: 0 });
+      glowAt(bo.x, bo.y, 26, bo.hue, 0.95);
+      ctx.fillStyle = '#fff'; drawStar(bo.x, bo.y, 3.2, bo.age * 0.25);
+      var hit = false;
+      for (var pi = pix.length - 1; pi >= 0; pi--) {
+        if (Math.hypot(pix[pi].x - bo.x, pix[pi].y - bo.y) < 24) { killPixie(pi, 'magic'); hit = true; break; }
+      }
+      if (hit || bo.age > 50 || bo.x < -30 || bo.y < -30 || bo.x > W + 30 || bo.y > H + 30) { explode(bo); bolts.splice(b, 1); }
+    }
+
+    // пикси
+    if (--pixCd <= 0) { spawnPixie(); pixCd = 150 + R() * 300; }
+    for (var xi = pix.length - 1; xi >= 0; xi--) {
+      var pp = pix[xi]; pp.age++;
+      pp.dir += Math.sin(t * 1.3 + pp.ph) * 0.04 + (R() - 0.5) * 0.07 + (pp.base - pp.dir) * 0.02;
+      var ddx = pp.x - cur.x, ddy = pp.y - cur.y, dd = Math.hypot(ddx, ddy) || 1;
+      if (dd < 110) { pp.x += ddx / dd * (110 - dd) * 0.03; pp.y += ddy / dd * (110 - dd) * 0.03; }
+      pp.x += Math.cos(pp.dir) * pp.sp;
+      pp.y += Math.sin(pp.dir) * pp.sp * 0.6 + Math.sin(t * 5 + pp.ph) * 0.7;
+      pp.y = Math.max(30, Math.min(H - 30, pp.y));
+      if (pp.age > 100 && (pp.x < -60 || pp.x > W + 60)) { pix.splice(xi, 1); continue; }
+      if (R() < 0.5) parts.push({ x: pp.x, y: pp.y, vx: (R() - 0.5) * 0.4, vy: R() * 0.5, life: 1, decay: 0.05,
+        size: 1.3, hue: pp.hue, star: R() < 0.4, spin: R() * 6 });
+      drawPixie(pp);
+    }
+
+    // палочка
+    kick *= 0.85;
+    var shake = held.r ? 1.6 : 0;
+    var wx = cur.x - cp * kick + (R() - 0.5) * shake, wy = cur.y - sp * kick + (R() - 0.5) * shake;
+    if (aimShow > 0) {
+      aimShow -= 0.02;
+      ctx.save(); ctx.setLineDash([2, 9]); ctx.lineCap = 'round'; ctx.lineWidth = 3;
+      ctx.strokeStyle = 'hsla(' + hue + ',100%,60%,' + (Math.min(1, aimShow) * 0.8) + ')';
+      ctx.beginPath(); ctx.moveTo(wx + cp * 30, wy + sp * 30); ctx.lineTo(wx + cp * 140, wy + sp * 140); ctx.stroke();
+      ctx.restore();
+    }
+    var target = Math.PI * 0.8 + aim + Math.max(-0.5, Math.min(0.5, vel.x * 0.03));
+    lastAngle += (target - lastAngle) * 0.12;
+    drawWand(wx, wy, lastAngle);
+    var gh = held.r ? 20 + R() * 25 : hue;
+    glowAt(wx, wy, (held.r ? 24 : 16) + Math.sin(t * 6) * 3, gh, 0.95);
+
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+</script>
+</body>
+</html>
